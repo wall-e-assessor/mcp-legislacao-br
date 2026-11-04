@@ -101,7 +101,7 @@ async def artigo_planalto(
     """
     try:
         r = await _resposta_planalto(tipo, numero, ano, url, forcar_ao_vivo)
-        blocos = html_para_blocos(r.conteudo)
+        blocos = html_para_blocos(r.texto())
         art = extrai_artigo(blocos, artigo)
         if not art:
             return _envelope("Planalto", r, artigo=normaliza_artigo(artigo), encontrado=False,
@@ -131,7 +131,7 @@ async def texto_planalto(
     """
     try:
         r = await _resposta_planalto(tipo, numero, ano, url, forcar_ao_vivo)
-        texto = texto_documento(html_para_blocos(r.conteudo), somente_vigente)
+        texto = texto_documento(html_para_blocos(r.texto()), somente_vigente)
         limite_caracteres = max(1000, min(limite_caracteres, 100000))
         fatia = texto[inicio : inicio + limite_caracteres]
         prox = inicio + len(fatia)
@@ -168,7 +168,7 @@ async def artigo_camara(
             r, _meta, v = await F.texto_normas(u, versao, forcar_ao_vivo)
             fonte = f"Câmara dos Deputados via normas.leg.br ({v['nome']})"
             extra = {"urn": u, "versao": v["versao"], "url_pagina": f"{F.NORMAS}/?urn={u}"}
-        art = extrai_artigo(html_para_blocos(r.conteudo), artigo)
+        art = extrai_artigo(html_para_blocos(r.texto()), artigo)
         if not art:
             return _envelope(fonte, r, artigo=normaliza_artigo(artigo), encontrado=False, **extra)
         return _envelope(fonte, r, artigo=art.numero, encontrado=True, texto_vigente=art.vigente, **extra)

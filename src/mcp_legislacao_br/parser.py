@@ -28,6 +28,7 @@ HEADING_RE = re.compile(
 )
 END_RE = re.compile(r"^\s*(Bras[íi]lia,|Este texto n[ãa]o substitui)")
 WS_RE = re.compile(r"[ \t\r\f\v ]+")
+SPACE_PUNCT_RE = re.compile(r"\s+([;,:)])")
 
 
 @dataclass
@@ -43,7 +44,8 @@ def _limpa(texto: str) -> str:
     texto = unicodedata.normalize("NFC", texto)
     texto = WS_RE.sub(" ", texto)
     linhas = [ln.strip() for ln in texto.split("\n")]
-    return " ".join(ln for ln in linhas if ln).strip()
+    texto = " ".join(ln for ln in linhas if ln).strip()
+    return SPACE_PUNCT_RE.sub(r"\1", texto)
 
 
 def _coleta(node, partes_vig: list[str], partes_comp: list[str], tachado: bool) -> None:
@@ -174,12 +176,27 @@ def extrai_artigo(blocos: list[Bloco], artigo: str | int) -> Artigo | None:
     )
 
 
+NOTA_RE = re.compile(
+    r"\([^()]*\b(?:redacao|acrescid[oa]s?|incluid[oa]s?|revogad[oa]s?|vigencia|em vigor|vide|"
+    r"producao de efeitos|suprimid[oa]s?|renumerad[oa]s?|alterad[oa]s?|vetad[oa]s? pel[oa]|regulamento)\b[^()]*\)"
+)
+
+
 def normaliza_comparacao(texto: str) -> str:
-    """Texto reduzido para comparar redações entre fontes."""
+    """Texto reduzido para comparar redações entre fontes.
+
+    Descarta acentos, pontuação, ordinais (1º/1o) e as notas de redação entre
+    parênteses, que o Planalto e a Câmara escrevem de formas diferentes:
+    "(Redação dada pela Lei nº ...)" no Planalto, "(Parágrafo com redação dada
+    pela Lei nº ...)" ou "(Inciso acrescido pela ...)" na Câmara. Conteúdo como
+    "(VETADO)" permanece.
+    """
     t = unicodedata.normalize("NFKD", texto.lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
-    t = re.sub(r"\((?:reda[cç][aã]o dada|inclu[ií]d[oa]|vide|revogad[oa]|vig[eê]ncia|produ[cç][aã]o de efeitos)[^)]*\)", " ", t)
-    t = t.replace("º", "o").replace("°", "o").replace("ª", "a")
+    t = t.replace("º", "o").replace("°", "o").replace("ª", "a").replace("“", "").replace("”", "")
+    anterior = None
+    while anterior != t:
+        anterior, t = t, NOTA_RE.sub(" ", t)
     t = re.sub(r"(\d)o\b", r"\1", t)
     t = re.sub(r"[^a-z0-9]+", " ", t)
     return t.strip()
