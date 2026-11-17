@@ -1,7 +1,10 @@
 """Leitura do HTML das normas e extração de artigos.
 
-O Planalto marca a redação revogada ou alterada com <strike> (também aceitamos
-<s> e <del>). O texto "vigente" é o texto com esses trechos removidos.
+O portal clássico do Planalto marca a redação revogada ou alterada com <strike>;
+o Novo Portal da Legislação usa <del> (também aceitamos <s>). O texto "vigente"
+é o texto com esses trechos removidos. No portal novo, só o corpo do ato
+(<div class="texto">) é lido, para que o sumário lateral e o cabeçalho não
+se confundam com dispositivos.
 """
 
 from __future__ import annotations
@@ -77,7 +80,7 @@ def _coleta(node, partes_vig: list[str], partes_comp: list[str], tachado: bool) 
         _coleta(filho, partes_vig, partes_comp, novo_tachado)
 
 
-def _blocos_folha(soup: BeautifulSoup) -> list[Tag]:
+def _blocos_folha(soup: BeautifulSoup | Tag) -> list[Tag]:
     """Elementos de bloco que não contêm outros elementos de bloco."""
     folhas = []
     for el in soup.find_all(BLOCK_TAGS):
@@ -88,8 +91,9 @@ def _blocos_folha(soup: BeautifulSoup) -> list[Tag]:
 
 def html_para_blocos(html: str | bytes, encoding: str | None = None) -> list[Bloco]:
     soup = BeautifulSoup(html, "lxml", from_encoding=encoding) if isinstance(html, bytes) else BeautifulSoup(html, "lxml")
+    corpo = soup.select_one("div.texto") or soup
     blocos: list[Bloco] = []
-    for el in _blocos_folha(soup):
+    for el in _blocos_folha(corpo):
         vig: list[str] = []
         comp: list[str] = []
         ja_tachado = any(p.name in STRUCK_TAGS for p in el.parents if isinstance(p, Tag))

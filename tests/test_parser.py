@@ -94,8 +94,30 @@ def test_comparacao_ignora_notas_e_ordinais():
     assert normaliza_comparacao(a) == normaliza_comparacao(b)
 
 
+def test_portal_novo_sumario_nao_confunde_e_secao_encerra():
+    from mcp_legislacao_br.parser import extrai_artigo, html_para_blocos
+    html = (Path(__file__).parent / "fixtures" / "portal_novo_l9099_trecho.html").read_text("utf-8")
+    blocos = html_para_blocos(html)
+    assert not any("Sumário" in b.completo for b in blocos)
+    art50 = extrai_artigo(blocos, "50")
+    assert art50.vigente.startswith("Art. 50. Os embargos de declaração interrompem")
+    assert "Seção XIV" not in art50.completo and "suspenderão" in art50.completo
+    art51 = extrai_artigo(blocos, "51")
+    assert art51.vigente.endswith("audiências do processo;") and "Brasília" not in art51.vigente
+
+
+def test_ancoras_e_portais():
+    from mcp_legislacao_br.fontes import ancora_artigo, metadados_pagina, para_classico, para_portal
+    assert ancora_artigo("48") == "#art48" and ancora_artigo("121-A") == "#art121a" and ancora_artigo("1015") == "#art1015"
+    u = "https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2015/lei/l13105.htm"
+    assert para_portal(u) == "https://portaldalegislacao.presidencia.gov.br/ccivil_03/_ato2015-2018/2015/lei/l13105.htm"
+    assert para_classico(para_portal(u)) == u
+    html = (Path(__file__).parent / "fixtures" / "portal_novo_l9099_trecho.html").read_text("utf-8")
+    assert metadados_pagina(html)["urn_lexml"] == "urn:lex:br:federal:lei:1995-09-26;9099"
+
+
 def test_candidatos_planalto():
-    assert candidatos_planalto("lei", "13.105", 2015)[2].endswith("/_ato2015-2018/2015/lei/l13105.htm")
+    assert candidatos_planalto("lei", "13.105", 2015)[2] == "https://portaldalegislacao.presidencia.gov.br/ccivil_03/_ato2015-2018/2015/lei/l13105.htm"
     assert any(u.endswith("/leis/l9099.htm") for u in candidatos_planalto("lei", 9099, 1995))
     assert any(u.endswith("/leis/2002/l10406compilada.htm") for u in candidatos_planalto("lei", 10406, 2002))
     assert candidatos_planalto("decreto-lei", 2848, 1940)[0].endswith("/decreto-lei/del2848compilado.htm")
