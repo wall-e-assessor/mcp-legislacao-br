@@ -1,7 +1,7 @@
 """Acesso HTTP com novas tentativas, tempo limite e cache local datado.
 
 Só o documento principal é baixado (nada de imagens, estilos ou scripts), o que
-evita o travamento observado quando um arquivo auxiliar do Planalto demora.
+evita o travamento observado quando um arquivo auxiliar do portal demora.
 """
 
 from __future__ import annotations
@@ -37,6 +37,20 @@ BLOQUEIO_RE = re.compile(r"Acesso Negado|requisi[çc][ãa]o foi bloqueada", re.I
 
 class FonteIndisponivel(Exception):
     """A fonte não respondeu com conteúdo utilizável e não há cache."""
+
+
+class Bloqueado(httpx.HTTPError):
+    """A fonte recusou o acesso automatizado (página de bloqueio ou desvio para outro site).
+
+    Não adianta repetir a requisição: quem chama deve tentar outra fonte.
+    """
+
+
+def _desvio_bloqueio(pedida: str, final: str) -> bool:
+    """O Portal da Legislação desvia acessos automatizados para gov.br/planalto."""
+    hp = httpx.URL(pedida).host
+    hf = httpx.URL(final).host
+    return hp != hf and hf in {"gov.br", "www.gov.br"}
 
 
 @dataclass
@@ -152,8 +166,10 @@ async def obter(url: str, *, usar_cache: bool = True, forcar_ao_vivo: bool = Fal
                 consultado_em=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 origem="ao vivo",
             )
+            if _desvio_bloqueio(url, r.url):
+                raise Bloqueado(f"a fonte desviou o acesso automatizado para {r.url}")
             if BLOQUEIO_RE.search(r.conteudo[:3000].decode("latin-1", "ignore")):
-                raise httpx.HTTPError("a fonte devolveu página de bloqueio (Acesso Negado)")
+                raise Bloqueado("a fonte devolveu página de bloqueio (Acesso Negado)")
             if validar and (msg := validar(r)):
                 raise FonteIndisponivel(msg)
             if usar_cache:
@@ -162,6 +178,9 @@ async def obter(url: str, *, usar_cache: bool = True, forcar_ao_vivo: bool = Fal
             return r
         except FonteIndisponivel:
             raise
+        except Bloqueado as e:
+            erro = f"Bloqueado: {e}"
+            break
         except (httpx.HTTPError, OSError) as e:
             erro = f"{type(e).__name__}: {e}"
             if tentativa < TENTATIVAS:
@@ -169,8 +188,8 @@ async def obter(url: str, *, usar_cache: bool = True, forcar_ao_vivo: bool = Fal
 
     if em_cache:
         em_cache.aviso = (
-            f"Fonte sem resposta após {TENTATIVAS} tentativas ({erro}). "
+            f"Fonte sem resposta utilizável ({erro}). "
             f"Conteúdo do cache local obtido em {em_cache.consultado_em}; reconferir ao vivo antes de uso definitivo."
         )
         return em_cache
-    raise FonteIndisponivel(f"{url}: {erro} (após {TENTATIVAS} tentativas, sem cache)")
+    raise FonteIndisponivel(f"{url}: {erro} (sem resposta utilizável, sem cache)")
