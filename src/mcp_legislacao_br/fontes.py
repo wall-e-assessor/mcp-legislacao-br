@@ -1,8 +1,12 @@
 """Fontes oficiais de legislação federal.
 
-- Planalto (Presidência da República): texto compilado em HTML, com redação
-  revogada tachada. Não há API; a URL é montada pelos padrões do portal ou
-  informada diretamente.
+- Novo Portal da Legislação (Presidência da República, SAJ/Casa Civil, no ar
+  desde 13/11/2026): fonte primária. Mesmo texto compilado e mesmos caminhos
+  do Planalto (/ccivil_03/...), em HTML UTF-8, com redação revogada marcada
+  por <del>, âncora estável por dispositivo (#art48, #art3i, #art3§1) e dados
+  estruturados schema.org com a URN LexML. Não há API.
+- Portal clássico (www.planalto.gov.br e portaldalegislacao-classico): reserva,
+  com os mesmos caminhos e a redação revogada em <strike>.
 - Senado Federal: busca no catálogo de normas (sigen) e dados abertos de
   legislação, com publicações, alterações e dispositivos alterados.
 - Normas.leg.br (Congresso Nacional): metadados JSON-LD e textos; a versão
@@ -19,7 +23,13 @@ from urllib.parse import quote, urlencode
 
 from .rede import FonteIndisponivel, Resposta, obter
 
-PLANALTO = "https://www.planalto.gov.br/ccivil_03"
+PORTAL = "https://portaldalegislacao.presidencia.gov.br/ccivil_03"
+CLASSICO = "https://www.planalto.gov.br/ccivil_03"
+PLANALTO = PORTAL  # compatibilidade: o nome antigo aponta para o portal novo
+DOMINIOS_PRESIDENCIA = re.compile(
+    r"^https?://(?:www\.)?(?:planalto\.gov\.br|portaldalegislacao(?:-classico)?\.presidencia\.gov\.br)/",
+    re.I,
+)
 NORMAS = "https://normas.leg.br"
 SENADO = "https://legis.senado.leg.br"
 
@@ -51,7 +61,7 @@ def normaliza_tipo(tipo: str) -> str:
     return t
 
 
-# ---------------------------------------------------------------- Planalto
+# ---------------------------------------------------------------- Portal da Legislação (Planalto)
 
 _BLOCOS_ATO = [(2004, 2006), (2007, 2010), (2011, 2014), (2015, 2018), (2019, 2022), (2023, 2026), (2027, 2030)]
 
@@ -63,39 +73,88 @@ def _bloco_ato(ano: int) -> str | None:
     return None
 
 
-def candidatos_planalto(tipo: str, numero: int | str, ano: int) -> list[str]:
-    """URLs prováveis no Planalto, da compilada para a simples."""
+def caminhos_planalto(tipo: str, numero: int | str, ano: int) -> list[str]:
+    """Caminhos prováveis sob /ccivil_03, da compilada para a simples."""
     tipo = normaliza_tipo(tipo)
     n = str(numero).replace(".", "")
     if tipo == "constituicao":
-        return [f"{PLANALTO}/constituicao/constituicaocompilado.htm", f"{PLANALTO}/constituicao/constituicao.htm"]
+        return [f"/constituicao/constituicaocompilado.htm", f"/constituicao/constituicao.htm"]
     if tipo == "emenda_constitucional":
-        return [f"{PLANALTO}/constituicao/emendas/emc/emc{n}.htm"]
+        return [f"/constituicao/emendas/emc/emc{n}.htm"]
     if tipo == "lei_complementar":
-        bases = [f"{PLANALTO}/leis/lcp/lcp{n}"]
+        bases = [f"/leis/lcp/lcp{n}"]
     elif tipo == "decreto_lei":
-        bases = [f"{PLANALTO}/decreto-lei/del{n}"]
+        bases = [f"/decreto-lei/del{n}"]
     else:
         pasta = {"lei": "lei", "decreto": "decreto", "medida_provisoria": "mpv"}[tipo]
         pref = {"lei": "l", "decreto": "d", "medida_provisoria": "mpv"}[tipo]
         bases = []
         bloco = _bloco_ato(ano)
         if bloco:
-            bases.append(f"{PLANALTO}/{bloco}/{ano}/{pasta}/{pref}{n}")
+            bases.append(f"/{bloco}/{ano}/{pasta}/{pref}{n}")
         if tipo == "lei":
             if 2001 <= ano <= 2003:
-                bases.append(f"{PLANALTO}/leis/{ano}/l{n}")
-            bases.append(f"{PLANALTO}/leis/l{n}")
+                bases.append(f"/leis/{ano}/l{n}")
+            bases.append(f"/leis/l{n}")
         elif tipo == "decreto":
             if 2001 <= ano <= 2003:
-                bases.append(f"{PLANALTO}/decreto/{ano}/d{n}")
-            bases.append(f"{PLANALTO}/decreto/d{n}")
+                bases.append(f"/decreto/{ano}/d{n}")
+            bases.append(f"/decreto/d{n}")
         elif tipo == "medida_provisoria":
-            bases.append(f"{PLANALTO}/mpv/{ano}/{n}")
+            bases.append(f"/mpv/{ano}/{n}")
     urls = []
     for b in bases:
         urls += [f"{b}compilado.htm", f"{b}compilada.htm", f"{b}.htm"]
     return urls
+
+
+def candidatos_planalto(tipo: str, numero: int | str, ano: int, raiz: str = PORTAL) -> list[str]:
+    """URLs prováveis numa raiz (portal novo por padrão), da compilada para a simples."""
+    return [raiz + c for c in caminhos_planalto(tipo, numero, ano)]
+
+
+def para_classico(url: str) -> str:
+    """Endereço equivalente no portal clássico (os caminhos foram preservados)."""
+    return re.sub(r"^https?://[^/]+/ccivil_03", CLASSICO, url, flags=re.I)
+
+
+def para_portal(url: str) -> str:
+    """Endereço equivalente no Novo Portal da Legislação."""
+    return re.sub(r"^https?://[^/]+/ccivil_03", PORTAL, url, flags=re.I)
+
+
+def ancora_artigo(artigo: str) -> str:
+    """'48' -> '#art48'; '1015' -> '#art1015'; '121-A' -> '#art121a' (padrão do portal novo)."""
+    return "#art" + artigo.replace("-", "").lower()
+
+
+def eh_portal_novo(url: str) -> bool:
+    return "portaldalegislacao.presidencia.gov.br" in url.lower()
+
+
+def metadados_pagina(html: str) -> dict:
+    """Dados estruturados (schema.org Legislation) que o portal novo publica em cada ato."""
+    import json as _json
+
+    out: dict = {}
+    for bloco in re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.S):
+        try:
+            dados = _json.loads(bloco)
+        except ValueError:
+            continue
+        for item in dados.get("@graph", [dados]) if isinstance(dados, dict) else []:
+            if item.get("@type") == "Legislation":
+                out = {
+                    "nome": item.get("name"),
+                    "ementa": item.get("description"),
+                    "tipo_ato": item.get("legislationType"),
+                    "data": item.get("legislationDate"),
+                    "urn_lexml": item.get("legislationIdentifier"),
+                    "url_canonica": item.get("url"),
+                    "lexml": item.get("sameAs"),
+                }
+                return out
+    return out
 
 
 def _numero_formatado(n: str) -> str:
@@ -115,21 +174,43 @@ def _valida_planalto(numero: str):
     return validar
 
 
+def _e_404(msg: str) -> bool:
+    return "HTTP 404" in msg or "não corresponde" in msg
+
+
 async def planalto_por_norma(tipo: str, numero: int | str, ano: int, forcar_ao_vivo: bool = False) -> Resposta:
+    """Busca no Novo Portal da Legislação; se ele recusar ou falhar, no portal clássico.
+
+    Os dois portais usam os mesmos caminhos. Se o portal novo responder 404 para
+    todos os candidatos, a norma não está lá e o clássico também é consultado.
+    """
     erros = []
     validar = None if normaliza_tipo(tipo) == "constituicao" else _valida_planalto(str(numero))
-    for url in candidatos_planalto(tipo, numero, ano):
-        try:
-            return await obter(url, forcar_ao_vivo=forcar_ao_vivo, validar=validar)
-        except FonteIndisponivel as e:
-            erros.append(str(e))
-    raise FonteIndisponivel("Planalto: nenhuma URL candidata respondeu. " + " | ".join(erros[-3:]))
+    for raiz in (PORTAL, CLASSICO):
+        for url in candidatos_planalto(tipo, numero, ano, raiz):
+            try:
+                return await obter(url, forcar_ao_vivo=forcar_ao_vivo, validar=validar)
+            except FonteIndisponivel as e:
+                erros.append(str(e))
+                if not _e_404(str(e)):
+                    break  # bloqueio ou rede: passa para a próxima raiz
+    raise FonteIndisponivel("Portal da Legislação e portal clássico: nenhuma URL candidata respondeu. " + " | ".join(erros[-3:]))
 
 
 async def planalto_por_url(url: str, forcar_ao_vivo: bool = False) -> Resposta:
-    if not re.match(r"^https?://(www\.)?planalto\.gov\.br/", url, re.I):
-        raise ValueError("A URL precisa ser do domínio planalto.gov.br")
-    return await obter(url, forcar_ao_vivo=forcar_ao_vivo)
+    """Lê a URL informada no portal novo; se falhar, o mesmo caminho no clássico."""
+    if not DOMINIOS_PRESIDENCIA.match(url):
+        raise ValueError("A URL precisa ser do Portal da Legislação (portaldalegislacao.presidencia.gov.br) ou do planalto.gov.br")
+    primeira = para_portal(url) if "/ccivil_03/" in url.lower() else url
+    try:
+        return await obter(primeira, forcar_ao_vivo=forcar_ao_vivo)
+    except FonteIndisponivel as e:
+        if "/ccivil_03/" not in url.lower():
+            raise
+        try:
+            return await obter(para_classico(url), forcar_ao_vivo=forcar_ao_vivo)
+        except FonteIndisponivel as e2:
+            raise FonteIndisponivel(f"portal novo: {e} | clássico: {e2}") from e2
 
 
 # ---------------------------------------------------------------- Senado: busca

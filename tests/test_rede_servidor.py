@@ -9,6 +9,14 @@ from mcp_legislacao_br import rede
 from mcp_legislacao_br import server as S
 
 FIX = (Path(__file__).parent / "fixtures" / "planalto_amostra.htm").read_bytes()
+NOVO = (Path(__file__).parent / "fixtures" / "portal_novo_l9099_trecho.html").read_bytes()
+PORTAL = "https://portaldalegislacao.presidencia.gov.br/ccivil_03"
+
+
+def _portal_bloqueia():
+    """O portal novo desvia acessos automatizados para gov.br/planalto (comportamento real)."""
+    respx.get(url__startswith=PORTAL).mock(return_value=httpx.Response(302, headers={"Location": "https://gov.br/planalto"}))
+    respx.get("https://gov.br/planalto").mock(return_value=httpx.Response(200, content=b"<html>teste para saber se voce e humano</html>"))
 URN = "urn:lex:br:federal:lei:1995-09-26;9099"
 
 
@@ -52,6 +60,7 @@ async def test_sem_cache_levanta():
 
 
 def _mocks_fontes(html_camara: bytes):
+    _portal_bloqueia()
     respx.get(url__regex=r"https://www\.planalto\.gov\.br/ccivil_03/leis/l9099compilad[oa]\.htm").mock(return_value=httpx.Response(404))
     respx.get("https://www.planalto.gov.br/ccivil_03/leis/l9099.htm").mock(return_value=httpx.Response(200, content=FIX))
     respx.get(url__startswith="https://legis.senado.leg.br/sigen/api/catalogo/basico").mock(return_value=httpx.Response(200, json={
@@ -74,7 +83,9 @@ async def test_conferir_vigencia_coincide():
     _mocks_fontes(camara)
     out = await S.conferir_vigencia("12-A", "lei", "9099", 1995)
     assert out["redacoes_coincidem"] is True, json.dumps(out, ensure_ascii=False, indent=1)
-    assert out["planalto"]["url"].endswith("/leis/l9099.htm")
+    assert out["planalto"]["url"] == "https://www.planalto.gov.br/ccivil_03/leis/l9099.htm"
+    assert out["planalto"]["portal"] == "clássico (reserva)"
+    assert out["planalto"]["url_artigo"] == PORTAL + "/leis/l9099.htm#art12a"
     assert out["camara"]["urn"] == URN
 
 
@@ -89,9 +100,41 @@ async def test_conferir_vigencia_diverge_e_senado():
 
 @respx.mock
 async def test_fonte_fora_vira_marcador():
+    respx.get(url__startswith=PORTAL).mock(side_effect=httpx.ConnectError("off"))
     respx.get(url__startswith="https://www.planalto.gov.br/").mock(side_effect=httpx.ConnectError("off"))
     out = await S.artigo_planalto("8", "lei", "9099", 1995)
-    assert out["marcador"].startswith("[FONTE INDISPONÍVEL NESTA SESSÃO — Planalto")
+    assert out["marcador"].startswith("[FONTE INDISPONÍVEL NESTA SESSÃO — Portal da Legislação")
+
+
+@respx.mock
+async def test_portal_novo_e_a_fonte_primaria():
+    respx.get(url__regex=PORTAL.replace(".", r"\.") + r"/leis/l9099compilad[oa]\.htm").mock(return_value=httpx.Response(404))
+    rota = respx.get(PORTAL + "/leis/l9099.htm").mock(return_value=httpx.Response(200, content=NOVO, headers={"content-type": "text/html; charset=utf-8"}))
+    classico = respx.get(url__startswith="https://www.planalto.gov.br/")
+    out = await S.artigo_planalto("48", "lei", "9099", 1995, incluir_revogado=True)
+    assert rota.called and not classico.called
+    assert out["portal"] == "Novo Portal da Legislação"
+    assert out["url_artigo"] == PORTAL + "/leis/l9099.htm#art48"
+    assert out["url_classico"] == "https://www.planalto.gov.br/ccivil_03/leis/l9099.htm"
+    assert out["urn_lexml"] == URN and out["ato"]["data"] == "1995-09-26"
+    assert out["texto_vigente"].startswith("Art. 48. Caberão embargos de declaração contra sentença ou acórdão nos casos previstos no Código de Processo Civil.")
+    assert "Os erros materiais podem ser corrigidos de ofício." in out["texto_vigente"]
+    assert "houver obscuridade" not in out["texto_vigente"] and "[[REVOGADO:" in out["texto_com_revogados"]
+
+
+@respx.mock
+async def test_bloqueio_do_portal_novo_nao_repete_tentativas():
+    _portal_bloqueia()
+    with pytest.raises(rede.FonteIndisponivel, match="desviou"):
+        await rede.obter(PORTAL + "/leis/l9099.htm")
+    assert respx.calls.call_count == 2  # uma ida ao portal e o desvio, sem novas tentativas
+
+
+@respx.mock
+async def test_url_do_planalto_e_lida_primeiro_no_portal_novo():
+    rota = respx.get(PORTAL + "/leis/l9099.htm").mock(return_value=httpx.Response(200, content=NOVO))
+    out = await S.artigo_planalto("50", url="https://www.planalto.gov.br/ccivil_03/leis/l9099.htm")
+    assert rota.called and out["texto_vigente"].startswith("Art. 50. Os embargos de declaração interrompem o prazo")
 
 
 async def test_ferramentas_registradas():

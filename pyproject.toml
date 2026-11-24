@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-legislacao-br"
-version = "0.1.0"
-description = "Servidor MCP para consultar legislação federal brasileira em fontes oficiais (Planalto, Câmara e Senado), com conferência de vigência por artigo."
+version = "0.2.0"
+description = "Servidor MCP para consultar legislação federal brasileira em fontes oficiais (Novo Portal da Legislação da Presidência, com o Planalto clássico como reserva, Câmara e Senado), com conferência de vigência por artigo."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Hudson Travassos" }]
 requires-python = ">=3.10"
-keywords = ["mcp", "legislacao", "planalto", "camara", "senado", "direito", "brasil", "lexml"]
+keywords = ["mcp", "legislacao", "planalto", "portal-da-legislacao", "camara", "senado", "direito", "brasil", "lexml"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Natural Language :: Portuguese (Brazilian)",
